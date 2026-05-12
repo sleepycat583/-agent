@@ -1,5 +1,6 @@
 import logging
 import os
+import json
 from pathlib import Path
 
 from openai import APIConnectionError, APITimeoutError, OpenAI
@@ -18,7 +19,7 @@ def load_system_prompt(prompt_path: Path) -> str:
         return f.read().strip()
 
 
-def summarize_meeting(meeting_text: str, model: str = "deepseek-chat") -> str:
+def summarize_meeting(meeting_text: str, model: str = "deepseek-chat") -> dict:
     base_dir = Path(__file__).resolve().parent
     prompt_path = base_dir / "prompt.txt"
     system_prompt = load_system_prompt(prompt_path)
@@ -42,6 +43,7 @@ def summarize_meeting(meeting_text: str, model: str = "deepseek-chat") -> str:
                 {"role": "user", "content": meeting_text},
             ],
             temperature=0.2,
+            response_format={"type": "json_object"},
             timeout=15,
         )
     except APITimeoutError as e:
@@ -58,8 +60,19 @@ def summarize_meeting(meeting_text: str, model: str = "deepseek-chat") -> str:
     if not content:
         raise ValueError("Model returned empty content.")
 
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError as e:
+        logger.exception("Failed to parse model JSON output: %s", e)
+        raise ValueError("Model output is not valid JSON.") from e
+
+    required_keys = {"core_conclusion", "viewpoints", "todo_list"}
+    missing_keys = required_keys - set(parsed.keys())
+    if missing_keys:
+        raise ValueError(f"Model JSON is missing required keys: {sorted(missing_keys)}")
+
     logger.info("Received meeting summary successfully")
-    return content
+    return parsed
 
 
 if __name__ == "__main__":
@@ -80,6 +93,6 @@ if __name__ == "__main__":
     try:
         result = summarize_meeting(mock_meeting_text)
         print("\n===== 会议提要输出 =====\n")
-        print(result)
+        print(json.dumps(result, indent=2, ensure_ascii=False))
     except Exception:
         logger.error("Meeting summary demo failed.")
